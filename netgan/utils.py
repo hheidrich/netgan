@@ -298,6 +298,35 @@ def train_val_test_split_adjacency(A, p_val=0.10, p_test=0.05, seed=0, neg_mul=1
     return train_ones, val_ones, val_zeros, test_ones, test_zeros
 
 
+def sample_rws(sampler, sampler_args, steps):
+    """
+    Sample random walks from a given model.
+    Parameters
+    ----------
+    sampler: tf.tensor of shape (batch_size, rw_len)
+             The input random walks to count the transitions in.
+    sampler_args: dict
+                  Containing the arguments passed to sampler.eval.
+    steps: int
+           Determines how many times sampler should evaluated.
+
+    Returns
+    -------
+    random walks: np.array of shape (steps * batch_size, rw_len)
+                  The random walks drawn from sampler.
+
+    """
+    
+    batch_size = int(sampler.shape[0])
+    rw_len = int(sampler.shape[1])
+    rws = np.ndarray([steps, batch_size, rw_len])
+    for step in range(steps):
+        rws[step, :, :] = sampler.eval(sampler_args)
+        if (step + 1) % 500 == 0:
+            print(step + 1)
+    return rws.reshape([steps * batch_size, rw_len])
+
+
 def score_matrix_from_random_walks(random_walks, N, symmetric=True):
     """
     Compute the transition scores, i.e. how often a transition occurs, for all node pairs from
@@ -319,16 +348,20 @@ def score_matrix_from_random_walks(random_walks, N, symmetric=True):
 
     """
 
-    random_walks = np.array(random_walks)
-    bigrams = np.array(list(zip(random_walks[:, :-1], random_walks[:, 1:])))
-    bigrams = np.transpose(bigrams, [0, 2, 1])
-    bigrams = bigrams.reshape([-1, 2])
+    n_walks = random_walks.shape[0]
+    rw_len = random_walks.shape[1]
+    num_bigrams = n_walks * (rw_len - 1)
+    mat = sp.coo_matrix(
+        (
+            np.ones(num_bigrams),
+            (random_walks[:, :-1].reshape([num_bigrams]),
+             random_walks[:, 1:].reshape([num_bigrams]))
+        ),
+        shape=[N, N]).tocsr()
     if symmetric:
-        bigrams = np.row_stack((bigrams, bigrams[:, ::-1]))
-
-    mat = sp.coo_matrix((np.ones(bigrams.shape[0]), (bigrams[:, 0], bigrams[:, 1])),
-                        shape=[N, N])
+        mat += mat.T
     return mat
+
 
 @jit(nopython=True)
 def random_walk(edges, node_ixs, rwlen, p=1, q=1, n_walks=1):
